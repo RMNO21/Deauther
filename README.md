@@ -131,7 +131,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 Users are responsible for ensuring compliance with local laws and regulations.
 The authors assume no liability for misuse or illegal activities.
 
-## 📞 Support
+## ⁉️ Issues
 
 For issues and questions:
 - Check the installation requirements
