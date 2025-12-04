@@ -22,7 +22,10 @@ The authors are not responsible for any misuse or illegal activities.
 ```bash
 git clone https://github.com/RMNO21/Deauther.git
 cd Deauther
+```
+### install requirements
 
+```bash
 # Make the installation script executable
 chmod +x requirements.sh
 
