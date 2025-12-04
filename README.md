@@ -32,7 +32,7 @@ chmod +x requirements.sh
 sudo ./requirements.sh
 ```
 
-### Step 2: Verify Installation
+### Then, Verify Installation
 
 ```bash
 # Check if required tools are installed
