@@ -236,7 +236,6 @@ attack_loop() {
 trap cleanup SIGINT
 
 check_root
-check_dependencies
 select_interface
 
 # Check current mode
