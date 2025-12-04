@@ -17,9 +17,12 @@ The authors are not responsible for any misuse or illegal activities.
 
 ## 🛠️ Installation
 
-### Step 1: Install Dependencies
+### Step 0: Clone the Repository
 
 ```bash
+git clone https://github.com/RMNO21/Deauther.git
+cd Deauther
+
 # Make the installation script executable
 chmod +x requirements.sh
 
@@ -34,10 +37,10 @@ sudo ./requirements.sh
 which airmon-ng
 which airodump-ng
 which aireplay-ng
-which "macchanger"
-which "iw"
-which "iwconfig"
-which "xterm"
+which macchanger
+which iw
+which iwconfig
+which xterm
 ```
 
 ## 📖 Usage
