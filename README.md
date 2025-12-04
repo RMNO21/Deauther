@@ -34,6 +34,10 @@ sudo ./requirements.sh
 which airmon-ng
 which airodump-ng
 which aireplay-ng
+which "macchanger"
+which "iw"
+which "iwconfig"
+which "xterm"
 ```
 
 ## 📖 Usage
