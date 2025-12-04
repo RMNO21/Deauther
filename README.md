@@ -13,7 +13,6 @@ The authors are not responsible for any misuse or illegal activities.
 - Linux-based operating system (Ubuntu, Kali Linux, Parrot OS, etc.)
 - Wireless network adapter supporting monitor mode
 - Root/sudo privileges
-- Python 3.6+
 
 ## 🛠️ Installation
 
