@@ -2,6 +2,10 @@
 
 A comprehensive Wi-Fi deauthentication tool for security testing and educational purposes.
 
+---
+<img width="1600" height="647" alt="image" src="https://github.com/user-attachments/assets/4728147f-5dc0-42f7-aede-45f1bc3af2dc" />
+
+---
 ## 🚨 Disclaimer
 
 This tool is intended for **educational purposes and authorized security testing only**. 
