@@ -14,7 +14,7 @@ The authors are not responsible for any misuse or illegal activities.
 
 ## 📋 Requirements
 
-- Linux-based operating system (Ubuntu, Kali Linux, Parrot OS, etc.)
+- Debian based linux distros operating system (Ubuntu, Kali Linux, Parrot OS, etc.)
 - Wireless network adapter supporting monitor mode
 - Root/sudo privileges
 
