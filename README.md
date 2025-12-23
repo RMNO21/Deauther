@@ -99,6 +99,7 @@ Edit the script variables to customize:
 - **Configurable Attacks**: Adjustable packet count and timing
 - **Monitor Mode Support**: Automatic setup and cleanup
 - **Logging**: Detailed activity logs
+- **Mac address spoofing**: Spoof interface mac address to avoid being tracked
 
 ## 🛡️ Safety Notes
 
