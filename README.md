@@ -132,7 +132,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 ## ⚠️ Legal Notice
 
 Users are responsible for ensuring compliance with local laws and regulations.
-The authors assume no liability for misuse or illegal activities.
+I assume no liability for misuse or illegal activities.
+Raman Tondro
 
 ## ⁉️ Issues
 
