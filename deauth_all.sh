@@ -152,6 +152,36 @@ enable_monitor_mode() {
     fi
 }
 
+# Map channel to frequency
+channel_to_freq() {
+    local ch="$1"
+    if [ "$ch" -ge 1 ] && [ "$ch" -le 13 ]; then
+        echo $((2412 + 5*(ch-1)))
+        return 0
+    fi
+    if [ "$ch" -eq 14 ]; then
+        echo 2484
+        return 0
+    fi
+    echo $((5000 + 5*ch))
+}
+
+# Reliable channel switch including 5GHz
+set_channel_safely() {
+    local ch="$1"
+    iw dev "$INTERFACE" set channel "$ch" &> /dev/null || iwconfig "$INTERFACE" channel "$ch" &> /dev/null
+    sleep 0.5
+    local cur=$(iw dev "$INTERFACE" info | awk '/channel/ {print $2}')
+    if [ "$cur" != "$ch" ]; then
+        local freq
+        freq=$(channel_to_freq "$ch")
+        ifconfig "$INTERFACE" down
+        iw dev "$INTERFACE" set freq "$freq" &> /dev/null
+        ifconfig "$INTERFACE" up
+        sleep 0.5
+    fi
+}
+
 # Auto-detect optimal parameters based on network density
 auto_detect_params() {
     # We do NOT override the top configuration variables here anymore.
@@ -180,11 +210,13 @@ scan_networks() {
     rm -f scan_results-*.csv networks.txt
 
     # Start airodump-ng in background
-    airodump-ng --output-format csv --write scan_results "$INTERFACE" &> /dev/null &
+    airodump-ng --band abg --output-format csv --write scan_results "$INTERFACE" &> /dev/null &
     AIRODUMP_PID=$!
     
-    # Show progress bar
+    SCAN_ABORTED=0
+    trap 'SCAN_ABORTED=1' SIGINT
     for ((i=1; i<=SCAN_TIME; i++)); do
+        if [ "$SCAN_ABORTED" -eq 1 ]; then break; fi
         PERCENT=$((i * 100 / SCAN_TIME))
         BAR_LEN=$((PERCENT / 2))
         BAR=$(printf "%${BAR_LEN}s" | tr ' ' '#')
@@ -195,13 +227,29 @@ scan_networks() {
     
     kill "$AIRODUMP_PID" &> /dev/null
     wait "$AIRODUMP_PID" 2>/dev/null
+    trap - SIGINT
     
     # Parse results
     echo -e "${YELLOW}[*] Parsing scan results...${NC}"
     if [ ! -f scan_results-01.csv ]; then
-        echo -e "${RED}[!] No scan results found. Retrying...${NC}"
-        scan_networks
-        return
+        tries=0
+        while [ "$tries" -lt 2 ]; do
+            tries=$((tries+1))
+            airodump-ng --band abg --output-format csv --write scan_results "$INTERFACE" &> /dev/null &
+            AIRODUMP_PID=$!
+            sleep 5
+            kill "$AIRODUMP_PID" &> /dev/null
+            wait "$AIRODUMP_PID" 2>/dev/null
+            if [ -f scan_results-01.csv ]; then break; fi
+        done
+        if [ ! -f scan_results-01.csv ]; then
+            echo -e "${RED}[!] No scan results produced.${NC}"
+            echo "row,essid,bssid,channel,privacy" > networks.csv
+            echo "--------------------------------------------------------------------------" > networks.txt
+            printf "%-3s %-30s %-17s %-4s %-10s\n" "ID" "ESSID" "BSSID" "CH" "ENC" >> networks.txt
+            echo "--------------------------------------------------------------------------" >> networks.txt
+            return
+        fi
     fi
     
     # Build a clean CSV of APs only with numeric channels
@@ -294,8 +342,8 @@ attack_loop() {
             fi
         done
 
-        # Iterate through each channel group
-        for channel in "${!channel_groups[@]}"; do
+        # Iterate sorted channels (numeric)
+        for channel in $(printf "%s\n" "${!channel_groups[@]}" | sort -n); do
             targets="${channel_groups[$channel]}"
 
             # Start simultaneous attacks on this channel
@@ -319,15 +367,14 @@ attack_loop() {
             echo -e "${BOLD}Target Group:${NC}    $targets"
             echo -e "${YELLOW}------------------------------------------------------------------------${NC}"
             
-            iw dev "$INTERFACE" set channel "$channel" &> /dev/null || \
-            iwconfig "$INTERFACE" channel "$channel" &> /dev/null
-            
+            set_channel_safely "$channel"
+
             # Double check if channel was set correctly (Crucial for 5GHz)
             CURRENT_CHAN=$(iw dev "$INTERFACE" info | grep channel | awk '{print $2}')
             if [[ "$CURRENT_CHAN" != "$channel" ]]; then
                  # Try harder with ifconfig down/up
                  ifconfig "$INTERFACE" down
-                 iw dev "$INTERFACE" set channel "$channel" &> /dev/null
+                 set_channel_safely "$channel"
                  ifconfig "$INTERFACE" up
             fi
             
