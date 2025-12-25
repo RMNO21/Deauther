@@ -204,34 +204,37 @@ scan_networks() {
         return
     fi
     
-    # Extract BSSID, ESSID, Channel, Encryption
-    echo "ID,ESSID,BSSID,Channel,Encryption" > networks.txt
+    # Build a clean CSV of APs only with numeric channels
+    # Columns: row,essid,bssid,channel,privacy
+    echo "row,essid,bssid,channel,privacy" > networks.csv
+    awk -F',' '
+    BEGIN { row=1 }
+    $1=="BSSID" { next }          # skip header
+    /^$/ { exit }                 # stop at blank line before Station section
+    {
+        bssid=$1; gsub(/^[ \t]+|[ \t]+$/, "", bssid);
+        channel=$4; gsub(/^[ \t]+|[ \t]+$/, "", channel);
+        privacy=$6; gsub(/^[ \t]+|[ \t]+$/, "", privacy);
+        essid=$14; sub(/^ /, "", essid);
+        if (essid=="") essid="<hidden>";
+        if (bssid ~ /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/) {
+            if (channel ~ /^[0-9]+$/ && channel != "-1") {
+                printf("%d,%s,%s,%s,%s\n", row, essid, bssid, channel, privacy);
+                row++;
+            }
+        }
+    }
+    ' scan_results-01.csv >> networks.csv
     
-    # We need to be careful with CSV parsing here.
-    # Airodump CSV has two sections: APs and Clients. We only want APs first.
-    # The first empty line separates them.
-    
-    tail -n +2 scan_results-01.csv | while IFS=, read -r BSSID FIRST_TIME_SEEN LAST_TIME_SEEN CHANNEL SPEED PRIVACY CIPHER AUTH POWER BEACON IV LANIP ID_LENGTH ESSID Key; do
-        # Stop when we hit the empty line separating APs and Clients
-        if [[ -z "$BSSID" ]]; then break; fi
-        
-        # Clean up variables (remove leading/trailing whitespace)
-        BSSID=$(echo "$BSSID" | tr -d ' ')
-        CHANNEL=$(echo "$CHANNEL" | tr -d ' ')
-        ESSID=$(echo "$ESSID" | sed 's/^ //g') # Remove leading space only
-        PRIVACY=$(echo "$PRIVACY" | tr -d ' ')
-        
-        # Skip invalid lines
-        if [[ "$CHANNEL" == "-1" ]]; then continue; fi
-        if [[ "$BSSID" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
-            echo "Network,$ESSID,$BSSID,$CHANNEL,$PRIVACY" >> networks.txt
-        fi
+    # Pretty text table for display
+    echo -e "${BOLD}\nScan Complete.${NC}"
+    printf "${BOLD}%-3s %-30s %-17s %-4s %-10s${NC}\n" "ID" "ESSID" "BSSID" "CH" "ENC"
+    echo "--------------------------------------------------------------------------" > networks.txt
+    printf "%-3s %-30s %-17s %-4s %-10s\n" "ID" "ESSID" "BSSID" "CH" "ENC" >> networks.txt
+    echo "--------------------------------------------------------------------------" >> networks.txt
+    tail -n +2 networks.csv | while IFS=, read -r row essid bssid channel privacy; do
+        printf "%-3s %-30s %-17s %-4s %-10s\n" "$row" "$essid" "$bssid" "$channel" "$privacy" >> networks.txt
     done
-    
-    # Format for display (columnated)
-    echo -e "\n${BOLD}Scan Complete. Found $(($(wc -l < networks.txt) - 1)) networks.${NC}"
-    column -t -s, networks.txt > networks_formatted.txt
-    mv networks_formatted.txt networks.txt
 }
 
 # Select target networks
@@ -239,37 +242,28 @@ select_targets() {
     clear
     print_banner
     echo -e "${BOLD}[*] Available networks:${NC}"
-    # Print networks.txt but skip the header line for cleaner manual printing if needed
-    # Or just cat it, but maybe colorize the header?
-    
-    # Let's colorize the header of networks.txt
-    head -n 2 networks.txt | sed "s/^/${CYAN}/;s/$/${NC}/"
-    tail -n +3 networks.txt
+    cat networks.txt
     
     echo ""
     read -p "Enter target numbers (comma-separated) or 'all': " TARGET_ROWS
 
     if [[ "$TARGET_ROWS" == "all" ]]; then
         echo -e "${YELLOW}[*] Selecting ALL networks...${NC}"
-        # Get all line numbers from networks.txt (skipping header)
-        TOTAL_LINES=$(wc -l < networks.txt)
-        ROWS=($(seq 1 $((TOTAL_LINES - 2))))
+        # Get all row numbers from networks.csv (skipping header)
+        TOTAL_LINES=$(wc -l < networks.csv)
+        ROWS=($(seq 1 $((TOTAL_LINES - 1))))
     else
         IFS=',' read -ra ROWS <<< "$TARGET_ROWS"
     fi
     
     for row in "${ROWS[@]}"; do
-        ADJUSTED_ROW=$((row + 2)) 
-        
-        LINE=$(sed -n "${ADJUSTED_ROW}p" networks.txt)
+        LINE=$(grep -E "^${row}," networks.csv)
         if [[ -z "$LINE" ]]; then
             echo -e "${RED}[!] Invalid row: $row${NC}"
             continue
         fi
         
-        BSSID=$(echo "$LINE" | awk '{print $5}')
-        CHANNEL=$(echo "$LINE" | awk '{print $7}')
-        ESSID=$(echo "$LINE" | awk '{print $3}')
+        IFS=, read -r IDX ESSID BSSID CHANNEL PRIVACY <<< "$LINE"
         
         if [[ -n "$BSSID" && -n "$CHANNEL" && -n "$ESSID" ]]; then
             TARGET_NETWORKS+=("$BSSID,$CHANNEL,$ESSID")
